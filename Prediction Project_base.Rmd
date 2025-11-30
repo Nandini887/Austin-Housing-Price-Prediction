@@ -1,0 +1,96 @@
+---
+title: "Prediction Project"
+author: "Emily Caraher, Carter St. Geme, Nandini Anand Kumar, Shyam Patel"
+date: "2025-08-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+austin <- read.csv('/Users/emily/Downloads/2025-26/Su25/STA 380/Project/austinhouses.csv')
+austin_holdout <- read.csv('/Users/emily/Downloads/2025-26/Su25/STA 380/Project/austinhouses_holdout.csv')
+```
+
+```{r}
+summary(austin)
+austin$homeType <- as.factor(austin$homeType)
+austin$latest_saledate <- as.Date(austin$latest_saledate)
+austin$zipcode <- as.factor(substr(as.character(austin$zipcode), 1, 4))
+austin$numOfUniqueFeatures <- as.integer(rowSums(austin[, c("numOfAccessibilityFeatures", "numOfPatioAndPorchFeatures", "numOfSecurityFeatures", "numOfWaterfrontFeatures", "numOfWindowFeatures", "numOfCommunityFeatures")]))
+
+austin_clean <- subset(austin, select = -c(streetAddress, description, homeType, numOfAccessibilityFeatures, numOfPatioAndPorchFeatures, numOfSecurityFeatures, numOfWaterfrontFeatures, numOfWindowFeatures, numOfCommunityFeatures))
+summary(austin_clean)
+```
+
+Once changed to the correct data types, some of these features (excluding street name and address) appear to be inappropriate to include as predictors. Home type should be excluded as single family homes are the only type present in the data set. We converted latest sale date to a date object instead of a character and then turned the zip code variable into levels based on its first 4 digits. The number of many of the features is very low, so we decided to combine the more unique features where the 3rd quartile was less than or equal to 1 (numOfAccessibilityFeatures, numOfPatioAndPorchFeatures, numOfSecurityFeatures, numOfWaterfrontFeatures, numOfWindowFeatures, numOfCommunityFeatures) into one variable.
+
+```{r}
+set.seed(1)
+train <- sample(1:nrow(austin_clean), size = 0.8 * nrow(austin_clean))
+train_data <- austin_clean[train, ]
+test_data <- austin_clean[-train, ]
+
+x_train <- model.matrix(log(latestPrice) ~ ., data = train_data)[, -1]
+y_train <- log(train_data$latestPrice)
+x_test <- model.matrix(log(latestPrice) ~ ., data = test_data)[, -1]
+y_test <- log(test_data$latestPrice)
+
+# stepwise selection
+full <- lm(log(latestPrice) ~ ., data = train_data)
+stepwise <- stats::step(full, direction = "both", scope = ~.)
+stepwise.pred <- predict(stepwise, newdata = test_data)
+(stepwise.rmse <- sqrt(mean((exp(stepwise.pred) - exp(y_test))^2)))
+
+# lasso
+library(glmnet)
+cv.out_lasso <- cv.glmnet(x_train, y_train, alpha = 1)
+bestlam_lasso <- cv.out_lasso$lambda.min
+out_lasso <- glmnet(x_train, y_train, alpha = 1)
+lasso.pred <- predict(out_lasso, s = bestlam_lasso, newx = x_test)
+(lasso.rmse <- sqrt(mean((exp(lasso.pred) - exp(y_test))^2)))
+
+# ridge regression
+cv.out_rr <- cv.glmnet(x_train, y_train, alpha = 0)
+bestlam_rr <- cv.out_rr$lambda.min
+out_rr <- glmnet(x_train, y_train, alpha = 0)
+ridge.pred <- predict(out_rr, s = bestlam_rr, newx = x_test)
+(ridge.rmse <- sqrt(mean((exp(ridge.pred) - exp(y_test))^2)))
+```
+
+```{r}
+library(tree)
+tree.austin <- tree(log(latestPrice) ~ ., train_data)
+plot(tree.austin)
+text(tree.austin, pretty = 0)
+
+yhat <- exp(predict(tree.austin, newdata = test_data))
+austin.test <- test_data$latestPrice
+(tree.rmse <- sqrt(mean((yhat - austin.test)^2)))
+
+cv.austin <- cv.tree(tree.austin)
+plot(cv.austin$size, cv.austin$dev, type = "b")
+
+prune.austin <- prune.tree(tree.austin, best = 7)
+plot(prune.austin)
+text(prune.austin, pretty = 0)
+
+yhat <- exp(predict(prune.austin, newdata = test_data))
+(pruned.rmse <- sqrt(mean((yhat - austin.test)^2)))
+
+library(randomForest)
+bag.austin <- randomForest(log(latestPrice) ~ ., train_data, mtry = 26, importance = TRUE)
+bag.austin
+yhat.bag <- exp(predict(bag.austin, newdata = test_data))
+(bag.rmse <-sqrt(mean((yhat.bag - austin.test)^2)))
+importance(bag.austin)
+
+rf.austin <- randomForest(log(latestPrice) ~ ., train_data, mtry = 3, importance = TRUE)
+yhat.rf <- exp(predict(rf.austin, newdata = test_data))
+(rf.rmse <-sqrt(mean((yhat.rf - austin.test)^2)))
+
+importance(rf.austin)
+```
+
